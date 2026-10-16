@@ -1,0 +1,149 @@
+name: Build FrostCord
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+  release:
+    types: [ published ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'pnpm'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build FrostCord
+        run: pnpm build
+
+      - name: Build desktop
+        run: pnpm buildDesktop
+
+      - name: Build browser extension
+        run: pnpm buildWeb
+
+      - name: Upload browser extension artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frostcord-browser-extension
+          path: |
+            dist/browser/**
+            dist/extension-*.zip
+          retention-days: 7
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frostcord-desktop
+          path: |
+            dist/desktop/**
+            dist/desktop.asar
+          retention-days: 7
+
+      - name: Create FrostCord distribution
+        if: github.event_name == 'release'
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/release
+          Compress-Archive -Path dist/desktop/* -DestinationPath dist/release/FrostCord-Desktop.zip
+
+      - name: Upload release artifacts
+        if: github.event_name == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frostcord-release
+          path: dist/release/*
+          retention-days: 90
+
+  build-installer:
+    runs-on: windows-latest
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'pnpm'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build FrostCord
+        run: pnpm build
+
+      - name: Verify desktop build
+        run: |
+          if (-not (Test-Path "dist/desktop/patcher.js")) {
+            Write-Error "Desktop build failed - patcher.js not found"
+            exit 1
+          }
+          if (-not (Test-Path "dist/desktop/preload.js")) {
+            Write-Error "Desktop build failed - preload.js not found"
+            exit 1
+          }
+          if (-not (Test-Path "dist/desktop/renderer.js")) {
+            Write-Error "Desktop build failed - renderer.js not found"
+            exit 1
+          }
+          if (-not (Test-Path "dist/desktop/renderer.css")) {
+            Write-Error "Desktop build failed - renderer.css not found"
+            exit 1
+          }
+          Write-Host "Desktop build verified successfully"
+
+      - name: Install NSIS
+        run: |
+          choco install nsis -y
+
+      - name: Build NSIS installer
+        run: |
+          makensis installer.nsi
+
+      - name: Verify installer was created
+        run: |
+          if (-not (Test-Path "FrostCordSetup.exe")) {
+            Write-Error "NSIS build failed - FrostCordSetup.exe not found"
+            exit 1
+          }
+          $size = (Get-Item "FrostCordSetup.exe").Length / 1MB
+          Write-Host "Installer created successfully: $size MB"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frostcord-installer
+          path: FrostCordSetup.exe
+          retention-days: 90
+
+      - name: Upload installer to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: FrostCordSetup.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
